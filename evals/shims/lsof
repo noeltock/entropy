@@ -1,0 +1,4 @@
+#!/bin/bash
+# Eval shim: real lsof (read-only), or nothing at all when ENTROPY_FX_LSOF=empty (simulates lsof being unavailable).
+[ "${ENTROPY_FX_LSOF:-}" = empty ] && exit 0
+exec /usr/sbin/lsof "$@"

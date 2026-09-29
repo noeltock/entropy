@@ -1,0 +1,26 @@
+#!/bin/bash
+# Eval shim for docker. Answers the few read-only queries entropy.sh makes with fixed fixture data;
+# every other command is logged and ignored. Every call is logged when ENTROPY_EVAL_TRIPWIRE is set.
+#   ENTROPY_FX_DOCKER=hang  -> everything except `context show` sleeps ENTROPY_FX_HANG_S (default 20) seconds
+#                              and then fails: a daemon that is not responding.
+log() { [ -n "${ENTROPY_EVAL_TRIPWIRE:-}" ] && printf 'docker\t%s\t%s\t%s\n' "$PWD" "$1" "$2" >> "$ENTROPY_EVAL_TRIPWIRE"; return 0; }
+case "$*" in
+  "context show") log ro "$*"; echo fixture-engine; exit 0 ;;
+esac
+if [ "${ENTROPY_FX_DOCKER:-}" = hang ]; then
+  log hang "$*"; sleep "${ENTROPY_FX_HANG_S:-20}"; exit 1
+fi
+case "$1 $2" in
+  "info --format"*|"info ") log ro "$*"; echo fixtureengineid; exit 0 ;;
+  "ps -q") log ro "$*"; exit 0 ;;
+  "system df")
+    log ro "$*"
+    case "$*" in
+      *--format*) printf 'Images|1.5GB (50%%)\nContainers|0B (0%%)\nLocal Volumes|3GB (100%%)\nBuild Cache|500MB\n' ;;
+      *) echo "fixture: 1 volume fx-db-volume (3GB), 1 image (1.5GB)" ;;
+    esac
+    exit 0 ;;
+  "volume ls"|"image ls"|"images "*|"ps "*|"container ls"|"inspect "*) log ro "$*"; exit 0 ;;
+esac
+log dry "$*"
+exit 0

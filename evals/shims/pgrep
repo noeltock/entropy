@@ -1,0 +1,8 @@
+#!/bin/bash
+# Eval shim: real pgrep, but only pids of fixture-marked processes are reported.
+[ -n "${ENTROPY_FX_MARKER:-}" ] || { echo "eval pgrep shim: ENTROPY_FX_MARKER not set" >&2; exit 2; }
+found=1
+for p in $(/usr/bin/pgrep "$@" 2>/dev/null); do
+  if /bin/ps -o command= -p "$p" 2>/dev/null | awk 'index($0, ENVIRON["ENTROPY_FX_MARKER"]) || (ENVIRON["ENTROPY_FX_CANARY_MARKER"] != "" && index($0, ENVIRON["ENTROPY_FX_CANARY_MARKER"])) {f=1} END{exit !f}'; then echo "$p"; found=0; fi
+done
+exit $found

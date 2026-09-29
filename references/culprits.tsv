@@ -1,0 +1,37 @@
+# Culprit signatures for entropy.sh. Tab-separated, one row per culprit; lines starting with # are ignored.
+# kind=proc: match is an awk extended regex on the full command line; arg is any | orphan (parent is launchd) | stale (running over 1 day).
+# kind=path: match is one or more globs joined by | (~ is expanded, missing paths skipped); arg is the tool's own clean command, `path` (remove the exact listed paths) or `-` (never automatic).
+# priority: normal | low (offer last) | ask (inspect with the user first) | expose (rank first, reachable from outside).
+# min_age_days (path only): count a match only if nothing inside changed for that many days.
+# Add your own rows in a file named by ENTROPY_CULPRITS_EXTRA; same columns, no header.
+kind	id	category	label	match	arg	priority	breaks	min_age_days
+proc	chrome-for-testing	agent processes	headless Chrome for Testing browsers (agent-browser, Playwright or Puppeteer)	Chrome for Testing	any	normal	agent browser sessions close; your own Chrome is untouched	
+proc	agent-browser	agent processes	agent-browser daemons	agent-browser-(darwin|linux)	any	normal	agent-browser sessions close and restart on the next use	
+proc	codex-broker	agent processes	orphaned Codex review brokers and their child servers	app-server-broker\.mjs	orphan	normal	the next /codex-review starts a fresh broker	
+proc	mcp-orphans	agent processes	MCP servers whose parent session is gone	(context7-mcp|@playwright/mcp|playwright-mcp|chrome-devtools-mcp|@modelcontextprotocol/|mcp-server)	orphan	normal	nothing live uses them; a new session starts its own copies	
+proc	dev-servers	agent processes	dev servers left running for over a day	(next dev|next-server|/vite( |$)|webpack serve|webpack-dev-server|expo start|astro dev|storybook dev|nodemon )	stale	normal	that dev server stops; restart it when you need it	
+proc	http-server	agent processes	ad-hoc static file servers	(python[0-9.]* -m http\.server|/http-server( |$))	any	normal	the served folder is no longer reachable	
+proc	tunnels	internet exposure	public tunnels (cloudflared or ngrok)	(^|/)(cloudflared|ngrok)( |$)	any	expose	the public URL stops working	
+proc	chrome-headless-shell	agent processes	headless Chrome shell browsers (Playwright or Puppeteer)	chrome-headless-shell	any	normal	agent browser sessions close; your own Chrome is untouched
+proc	playwright-mcp-chrome	agent processes	orphaned Playwright MCP Chrome browsers	ms-playwright/mcp-chrome	orphan	normal	nothing live uses them; the next Playwright MCP session starts its own browser
+path	npm	caches	npm package cache	~/.npm/_cacache	npm cache clean --force	normal	next npm install is slower; global across projects; node_modules untouched	
+path	uv	caches	uv package cache	~/.cache/uv	uv cache clean	low	next uv install re-downloads packages; global across projects	
+path	pnpm	caches	pnpm package store	~/Library/pnpm/store|~/.local/share/pnpm/store	pnpm store prune	normal	prune only drops unreferenced packages (often little); never delete the store directory	
+path	yarn	caches	Yarn cache	~/Library/Caches/Yarn|~/.cache/yarn	yarn cache clean	normal	next yarn install is slower	
+path	pip	caches	pip cache	~/Library/Caches/pip|~/.cache/pip	pip3 cache purge	normal	next pip install re-downloads wheels	
+path	homebrew	caches	Homebrew download cache	~/Library/Caches/Homebrew	brew cleanup --prune=all	normal	old bottles re-download if you reinstall	
+path	playwright-mcp-profiles	caches	stale Playwright MCP browser profiles	~/Library/Caches/ms-playwright/mcp-chrome-*	path	normal	those profiles are recreated by the next Playwright MCP session (logins kept in them are lost); the live-use gate must show no process using them	1
+path	bun	caches	bun package cache	~/.bun/install/cache	bun pm cache rm	normal	next bun install re-downloads packages; global across projects
+path	cocoapods	caches	CocoaPods cache	~/Library/Caches/CocoaPods	pod cache clean --all	normal	next pod install re-downloads specs	
+path	playwright	caches	Playwright browser downloads	~/Library/Caches/ms-playwright	npx playwright uninstall --all	low	browser tools (Playwright, some agent browsers) re-download about 1 GB on next use	
+path	puppeteer	caches	Puppeteer browser downloads	~/.cache/puppeteer	path	normal	Puppeteer re-downloads Chrome on next use	
+path	huggingface	caches	Hugging Face model cache	~/.cache/huggingface	path	low	models re-download on next use (can be many GB)	
+path	ollama	caches	Ollama models	~/.ollama/models	ollama rm <model>	ask	each removed model must be pulled again; choose models by name	
+path	xcode-derived-data	caches	Xcode DerivedData (build output)	~/Library/Developer/Xcode/DerivedData	path	normal	the next Xcode build is a full rebuild	
+path	xcode-device-support	caches	Xcode device support symbols	~/Library/Developer/Xcode/*DeviceSupport	path	normal	symbols re-download when a device of that OS version connects	
+path	ios-simulators	caches	iOS simulator devices	~/Library/Developer/CoreSimulator/Devices	xcrun simctl delete unavailable	normal	removes simulators with no runtime; real freed space is usually far below the listed size; delete all also drops installed test apps	
+path	backups	user data	backup folder	~/backups	-	ask	may be the only copy; never removed automatically	
+path	trash	user data	Trash	~/.Trash	-	ask	emptying is permanent and needs Finder; this is what frees space after earlier Trash moves	
+path	colima	docker	Colima VM disk	~/.colima	-	ask	holds that engine's containers and volumes; check with colima list first	
+path	claude-scratch	agent scratch	stale Claude Code session scratch folders	/private/tmp/claude-*/*/*	path	normal	only that finished session's temp files	2
+path	agent-browser-sessions	agent scratch	stale agent-browser session files	~/.agent-browser/*.config|~/.agent-browser/*.target	path	normal	those browser sessions cannot be resumed	1

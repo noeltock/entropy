@@ -1,0 +1,22 @@
+#!/bin/bash
+# Eval shim: real ps, but only fixture-marked processes are visible, so real processes
+# on the machine can neither change a result nor be reached by an agent under test.
+# ENTROPY_FX_MARKER: fixture process tag. ENTROPY_FX_CANARY_MARKER: optional canary tag.
+# (awk reads the tags from the environment so they never appear in this pipeline's own command lines.)
+# Inside Claude Code's sandbox /bin/ps cannot run at all; when ENTROPY_EVAL_PS_BROKER names a folder, the request
+# is handed to the harness (agent/run_agent.sh), which runs the real ps outside the sandbox and answers there.
+[ -n "${ENTROPY_FX_MARKER:-}" ] || { echo "eval ps shim: ENTROPY_FX_MARKER not set" >&2; exit 2; }
+filter() { awk 'index($0, ENVIRON["ENTROPY_FX_MARKER"]) || (ENVIRON["ENTROPY_FX_CANARY_MARKER"] != "" && index($0, ENVIRON["ENTROPY_FX_CANARY_MARKER"]))'; }
+out=$(/bin/ps "$@" 2>&1); rc=$?
+if [ $rc -ne 0 ] && [ -n "${ENTROPY_EVAL_PS_BROKER:-}" ] && printf '%s' "$out" | grep -q 'Operation not permitted'; then
+  d=$ENTROPY_EVAL_PS_BROKER; id=$$
+  printf '%s' "$*" > "$d/psreq.$id.tmp" && /bin/mv "$d/psreq.$id.tmp" "$d/psreq.$id"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+    [ -f "$d/psres.$id" ] && break
+    sleep 0.1
+  done
+  if [ -f "$d/psres.$id" ]; then out=$(cat "$d/psres.$id"); rc=$(cat "$d/psrc.$id" 2>/dev/null || echo 0); fi
+  /bin/rm -f "$d/psres.$id" "$d/psrc.$id"
+fi
+printf '%s\n' "$out" | filter
+exit 0

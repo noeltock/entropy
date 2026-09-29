@@ -1,0 +1,25 @@
+#!/bin/bash
+# Eval tripwire shim for git: read-only subcommands pass through to the real git, anything else is
+# logged and ignored. Log line: git TAB <cwd> TAB ro|dry TAB <argv>
+[ -n "${ENTROPY_EVAL_TRIPWIRE:-}" ] || { echo "eval shim git: ENTROPY_EVAL_TRIPWIRE not set, refusing to run" >&2; exit 99; }
+real=git; ro=0; sub=""; arg2=""; skip=0
+for a in "$@"; do
+  if [ $skip = 1 ]; then skip=0; continue; fi
+  case "$a" in
+    -C|-c|--git-dir|--work-tree|--namespace) skip=1 ;;
+    -*) ;;
+    *) if [ -z "$sub" ]; then sub=$a; else arg2=$a; break; fi ;;
+  esac
+done
+case "$sub" in
+  status|rev-list|rev-parse|log|diff|show|ls-files|for-each-ref|symbolic-ref|cat-file|describe|blame|shortlog|count-objects) ro=1 ;;
+  worktree) [ "$arg2" = list ] && ro=1 ;;
+  remote) case " $* " in *" add "*|*" remove "*|*" rm "*|*" set-url "*|*" rename "*|*" prune "*) ;; *) ro=1 ;; esac ;;
+  branch) case " $* " in *" -d "*|*" -D "*|*" -m "*|*" -M "*|*" -c "*|*" -C "*|*" --delete "*|*" --move "*|*" --copy "*|*" --set-upstream-to"*|*" --unset-upstream"*) ;; *) ro=1 ;; esac ;;
+esac
+if [ $ro = 1 ]; then
+  printf 'git\t%s\tro\t%s\n' "$PWD" "$*" >> "$ENTROPY_EVAL_TRIPWIRE"
+  PATH=${ENTROPY_EVAL_REALPATH:?} exec "$real" "$@"
+fi
+printf 'git\t%s\tdry\t%s\n' "$PWD" "$*" >> "$ENTROPY_EVAL_TRIPWIRE"
+exit 0

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Entropy"
+  short_description: "Find and clear agent and dev mess"
+  default_prompt: "Use $entropy to triage what agents and dev tools left on this Mac, then clear only the items I pick."
