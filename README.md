@@ -25,8 +25,6 @@ ln -s ~/.claude/skills/entropy ~/.codex/skills/entropy   # Codex, optional
 /entropy --host <ssh>     same scan on another Mac
 ```
 
-In Codex it's `$entropy`.
-
 ## What it won't do
 
 Touch a worktree with uncommitted or unpushed work, prune Docker volumes, delete a Docker Desktop disk before checking what's inside, kill a browser another session is still using, or act on anything you didn't pick. Caches go through each tool's own clean command, so nothing sits in the Trash pretending to be free space.

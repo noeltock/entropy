@@ -18,7 +18,7 @@ metadata:
 
 # Entropy
 
-Agents start things and walk away. Entropy scans for what they left behind in under 20 seconds, ranks it by what it costs, and clears only the rows the user picks. Run it as `/entropy` in Claude Code or `$entropy` in Codex.
+Agents start things and walk away. Entropy scans for what they left behind in under 20 seconds, ranks it by what it costs, and clears only the rows the user picks. Run it as `/entropy`.
 
 ## Flow
 
