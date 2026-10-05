@@ -10,12 +10,28 @@ Entropy is a skill for Claude Code and Codex. It scans a Mac in under 20 seconds
 
 ## Install
 
+With Node.js installed:
+
+```bash
+npx skills add noeltock/entropy -g
+```
+
+Pick your agent in the installer. `-g` makes the skill available across projects. To install for both Claude Code and Codex directly:
+
+```bash
+npx skills add noeltock/entropy -g -a claude-code codex
+```
+
+Or clone it manually:
+
 ```bash
 git clone https://github.com/noeltock/entropy.git ~/.claude/skills/entropy
 ln -s ~/.claude/skills/entropy ~/.codex/skills/entropy   # Codex, optional
 ```
 
 ## Use
+
+Run `/entropy` in Claude Code or Codex. It shows a table first, then waits for you to pick what goes. Reply with row IDs like `E1 E4`, or `safe` for all the ● and ○ rows. ◆ rows need an explicit ID; held rows stay held.
 
 ```
 /entropy                  scan, then reply with IDs (E1 E4) or "safe"
@@ -24,6 +40,8 @@ ln -s ~/.claude/skills/entropy ~/.codex/skills/entropy   # Codex, optional
 /entropy --deep           the slow scans, when you actually want them
 /entropy --host <ssh>     same scan on another Mac
 ```
+
+Installing the skill doesn't run a scan or clean anything. After cleanup, it scans again and shows what's gone and how much disk space changed.
 
 ## What it won't do
 
