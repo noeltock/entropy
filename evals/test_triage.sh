@@ -106,12 +106,12 @@ case_4() {
   json_rows "$(f age10)" items | col 3 | has_line proc:chrome-for-testing && fail "a chrome row exists at MIN_PROC_AGE=10 with only young processes"
   grep -qF "young agent processes skipped" "$(f age10)" || fail "the skipped-young note is missing at MIN_PROC_AGE=10"
   items=$(json_rows "$(f base_json)" items)
-  printf '%s\n' "$items" | awk -F'\t' -v p="$PID_CHROME" '$3=="proc:chrome-for-testing" && index(" " $11 " ", " " p " ") {f=1} END{exit !f}' ||
+  printf '%s\n' "$items" | awk -F'\t' -v p="$PID_CHROME" '$3 ~ /^proc:chrome-for-testing:/ && index(" " $11 " ", " " p " ") {f=1} END{exit !f}' ||
     fail "chrome is not offered at MIN_PROC_AGE=0"
-  mcp=$(printf '%s\n' "$items" | awk -F'\t' '$3=="proc:mcp-orphans"')
+  mcp=$(printf '%s\n' "$items" | awk -F'\t' '$3 ~ /^proc:mcp-orphans:/')
   [ -n "$mcp" ] || { fail "no orphaned MCP row"; return; }
   [ "$(printf '%s' "$mcp" | col 11)" = "$PID_MCP_ORPHAN" ] || fail "MCP row target is '$(printf '%s' "$mcp" | col 11)', expected only the orphan $PID_MCP_ORPHAN (live one is $PID_MCP_ALIVE)"
-  printf '%s' "$mcp" | col 8 | has_line "parent gone" || fail "orphan is not flagged 'parent gone'"
+  [ "$(printf '%s' "$mcp" | col 9)" = ask ] || fail "parent PID 1 is incorrectly treated as proof that the process is disposable"
 }
 
 # 5: containment. Every selectable row points inside the fixture tree (symlinks resolved) or at a fixture process.
@@ -192,7 +192,7 @@ desc() {
     1b) echo "worktrees held when lsof is unavailable (fail closed)" ;;
     2) echo "Docker Desktop disk is ask-first (migrate), never worth-doing" ;;
     3) echo "backups and Trash are ask-first (ask)" ;;
-    4) echo "process min age respected; orphan flagged 'parent gone'" ;;
+    4) echo "process min age respected; parent PID 1 requires review" ;;
     5) echo "containment: selectable rows stay inside the fixture" ;;
     6) echo "read-only: fixture checksum identical after a full run" ;;
     7) echo "--json parses, no '?', IDs match grid and run file" ;;

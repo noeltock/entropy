@@ -20,6 +20,10 @@ done
 
 START=$(date +%s)
 RC=0
+echo "=== Worktree size regression ==="
+bash "$HERE/test_worktree_sizes.sh" || RC=1
+echo "=== Decision evidence regression ==="
+bash "$HERE/test_decisions.sh" || RC=1
 echo "=== Layer A: triage tests ==="
 bash "$HERE/test_triage.sh" $MUTATE || RC=1
 if [ -n "$AGENT" ]; then

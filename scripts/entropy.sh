@@ -27,6 +27,7 @@
 : "${ENTROPY_MIN_MB:=50}"                                # disk rows smaller than this are summarised in one footer line (--all shows them)
 : "${ENTROPY_MIN_PROC_AGE:=10}"                          # minutes: younger browser/agent processes are skipped as likely in use
 : "${ENTROPY_NO_HISTORY:=}"                              # set to 1 to skip writing history.jsonl
+: "${ENTROPY_DETAIL_BUDGET:=4}"                          # bounded breakdown of known large directories
 # ===== end of defaults =====
 
 TAB=$(printf '\t')
@@ -46,6 +47,7 @@ T() {
 clean() { printf '%s' "$1" | tr '\t\n\r"\\' '      '; }
 note() { printf '%s\n' "$1" >> "$W/notes"; }
 mach() { printf '%s\t%s\n' "$1" "$2" >> "$W/machine.tsv"; }
+timed_phase() { local start=$(date +%s); "$1"; mach "${1}_s" "$(( $(date +%s) - start ))"; }
 etime_s() {
   awk -v e="$1" 'BEGIN{d=0; if(index(e,"-")){split(e,p,"-"); d=p[1]; e=p[2]} n=split(e,q,":"); if(n==3)s=q[1]*3600+q[2]*60+q[3]; else s=q[1]*60+q[2]; print d*86400+s}'
 }
@@ -103,12 +105,20 @@ EOF
 PROC_AWK='
 function secs(e,   d,p,n,q,s) { d=0; if (index(e,"-")) { split(e,p,"-"); d=p[1]; e=p[2] } n=split(e,q,":"); if (n==3) s=q[1]*3600+q[2]*60+q[3]; else s=q[1]*60+q[2]; return d*86400+s }
 function mine(pid,   p,d) { p=pid; for (d=0; d<40 && p>1; d++) { if (p==self) return 1; p=pp[p] } return 0 }
-function tree(root, r,   qh,qt,q,cur,n,ka,i,k,j) {
-  qh=1; qt=1; q[1]=root; inr[r,root]=1
+function agent_owner(pid,   p,d) {
+  p=pp[pid]
+  for (d=0; d<40 && p>1; d++) {
+    if (pcmd[p] ~ /(^|\/)(claude|codex)( |$)|\/Codex.app\/Contents\/MacOS\/Codex( |$)/) return p
+    p=pp[p]
+  }
+  return 0
+}
+function tree(root, r,   qh,qt,q,cur,n,ka,i,k,j,g) {
+  g=r SUBSEP root; groups[g]=r; roots[g]=root
+  qh=1; qt=1; q[1]=root; inr[g,root]=1
   while (qh<=qt) { cur=q[qh]; qh++; n=split(kids[cur], ka, " ")
-    for (i=1;i<=n;i++) { k=ka[i]; if (inr[r,k] || ((k in claim) && claim[k]!=r)) continue; inr[r,k]=1; qt++; q[qt]=k } }
-  for (j=qt; j>=1; j--) { k=q[j]; cnt[r]++; rss[r]+=prss[k]; pids[r]=pids[r] " " k; if (page[k]>maxage[r]) maxage[r]=page[k] }
-  if (!(r in best) || page[root]>page[best[r]]) best[r]=root
+    for (i=1;i<=n;i++) { k=ka[i]; if (inr[g,k] || ((k in claim) && claim[k]!=r)) continue; inr[g,k]=1; qt++; q[qt]=k } }
+  for (j=qt; j>=1; j--) { k=q[j]; cnt[g]++; rss[g]+=prss[k]; pids[g]=pids[g] " " k; if (page[k]>maxage[g]) maxage[g]=page[k] }
 }
 BEGIN { FS="\t" }
 FNR==NR { if ($1=="proc") { nr++; rid[nr]=$2; rcat[nr]=$3; rlabel[nr]=$4; rmatch[nr]=$5; rwhen[nr]=$6; rprio[nr]=$7; rbreaks[nr]=$8 } next }
@@ -132,9 +142,9 @@ END {
     r=claim[pid]; if ((pp[pid] in claim) && claim[pp[pid]]==r) continue
     tree(pid, r) }
   if (young>0) print "YOUNG\t" young
-  for (r=1;r<=nr;r++) if (cnt[r]>0) {
+  for (g in groups) { r=groups[g]; root=roots[g]
     b=rbreaks[r]; if (b=="") b="-"
-    print rid[r] "\t" rcat[r] "\t" rlabel[r] "\t" rprio[r] "\t" b "\t" cnt[r] "\t" rss[r] "\t" maxage[r] "\t" best[r] "\t" (pp[best[r]]==1 ? "1" : "0") "\t" substr(pids[r],2) }
+    print rid[r] "\t" rcat[r] "\t" rlabel[r] "\t" rprio[r] "\t" b "\t" cnt[g] "\t" rss[g] "\t" maxage[g] "\t" root "\t" agent_owner(root) "\t" substr(pids[g],2) }
 }'
 
 phase_procs() {
@@ -144,9 +154,13 @@ phase_procs() {
       local owner tier=1
       if [ "$id" = YOUNG ]; then note "$cat young agent processes skipped (<${ENTROPY_MIN_PROC_AGE}m, likely in use)"; continue; fi
       owner=$(owner_of "$root")
-      [ "$orph" = 1 ] && owner="$owner (parent gone)"
-      [ "$prio" = expose ] && tier=0
-      emit "$tier" "$cat" "proc:$id" "$label ($cnt process(es))" "$rss" "$cnt" "$age" "$owner" "$prio" "kill-tree" "$pids" "$breaks"
+      # PPID 1 is normal for detached brokers; it does not establish abandonment.
+      prio=ask
+      label="$label ($cnt processes, root PID $root; session ownership needs review)"
+      if [ "$orph" -gt 0 ]; then
+        tier=9; prio=held; label="$label; live agent ancestor PID $orph"
+      fi
+      emit "$tier" "$cat" "proc:$id:$root" "$label" "$rss" "$cnt" "$age" "$owner" "$prio" "kill-tree" "$pids" "$breaks"
     done
 }
 
@@ -236,11 +250,27 @@ phase_docker() {
 
 # ---------- caches, scratch and other fixed paths (from the culprit table) ----------
 size_job() { # "<id><TAB><path>" -> id, KiB, mtime, path
-  local id=${1%%$'\t'*} p=${1#*$'\t'} k m
+  local id=${1%%$'\t'*} p=${1#*$'\t'} k m out
   if [ -n "${PATH_DEADLINE:-}" ] && [ "$(date +%s)" -ge "$PATH_DEADLINE" ]; then printf '%s\t?\t0\t%s\n' "$id" "$p"; return 0; fi
-  k=$(T 20 du -sk "$p" 2>/dev/null | awk '{print $1}')
+  k='?'
+  if out=$(T 20 du -sk "$p" 2>/dev/null); then k=$(printf '%s\n' "$out" | awk 'NR==1 && $1 ~ /^[0-9]+$/ {print $1}'); fi
   m=$(stat -f %m "$p" 2>/dev/null)
   printf '%s\t%s\t%s\t%s\n' "$id" "${k:-?}" "${m:-0}" "$p"
+}
+
+# Regular scratch files need metadata, not a du/stat/shell process per file.
+size_files() {
+  [ -s "$W/path.files" ] || return 0
+  cut -f3- "$W/path.files" | tr '\n' '\0' |
+    T 5 xargs -0 -n200 stat -f "%b$TAB%m$TAB%N" > "$W/file.stats" 2>/dev/null
+  awk -F'\t' -v now="$1" '
+    FILENAME==ARGV[1] { id[$3]=$1; age[$3]=$2+0; next }
+    $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {
+      seen[$3]=1
+      if (now-$2>=age[$3]*86400) print id[$3] "\t" $1/2 "\t" $2 "\t" $3
+    }
+    END { for (p in id) if (!(p in seen)) print id[p] "\t?\t0\t" p }
+  ' "$W/path.files" "$W/file.stats"
 }
 
 phase_paths() {
@@ -248,6 +278,7 @@ phase_paths() {
   local jobs=$W/path.jobs now
   now=$(date +%s)
   : > "$jobs"
+  : > "$W/path.files"
   awk -F'\t' '$1=="path"{print $2 "\t" $5 "\t" $9}' "$CUL" |
     while IFS="$TAB" read -r id globs minage; do
       local -a gl
@@ -260,6 +291,10 @@ EOF
         g=${g/#\/private\/tmp/$ENTROPY_TMP_ROOT}
         while IFS= read -r p; do
           [ -n "$p" ] && [ ! -L "$p" ] || continue
+          if [ -f "$p" ]; then
+            printf '%s\t%s\t%s\n' "$id" "${minage:-0}" "$p" >> "$W/path.files"
+            continue
+          fi
           if [ "${minage:-0}" -gt 0 ] 2>/dev/null; then
             if [ -d "$p" ]; then
               out=$(T 3 find "$p" -mtime "-$minage" -print -quit 2>/dev/null) || continue
@@ -275,13 +310,16 @@ $(compgen -G "$g")
 EOF
       done
     done
-  [ -s "$jobs" ] || return 0
   PATH_DEADLINE=$(( $(date +%s) + ENTROPY_PATH_BUDGET )); export PATH_DEADLINE
-  tr '\n' '\0' < "$jobs" | nice -n 10 xargs -0 -n1 -P6 bash -c 'size_job "$0"' > "$W/path.sizes"
+  : > "$W/path.sizes"
+  size_files "$now" > "$W/path.sizes"
+  if [ -s "$jobs" ]; then
+    tr '\n' '\0' < "$jobs" | nice -n 10 xargs -0 -n1 -P6 bash -c 'size_job "$0"' >> "$W/path.sizes"
+  fi
   awk -F'\t' '$2=="?"{u[$1]++; up[$1]=$4; next}
     {cnt[$1]++; kb[$1]+=$2; if ($3>mt[$1]) mt[$1]=$3; tg[$1]=tg[$1] (tg[$1] ? "|" : "") $4}
     END{for (k in u) print "UNM\t" k "\t" u[k] "\t" up[k]
-      for (k in cnt) print k "\t" cnt[k] "\t" kb[k] "\t" mt[k] "\t" tg[k]}' "$W/path.sizes" |
+      for (k in cnt) print k "\t" cnt[k] "\t" (u[k]>0 ? "?" : kb[k]+0) "\t" mt[k]+0 "\t" tg[k]}' "$W/path.sizes" |
     while IFS="$TAB" read -r id cnt kb mt tg; do
       if [ "$id" = UNM ]; then
         if [ "$kb" -gt 1 ]; then note "not measured: $kb $cnt paths (timeout, budget or no permission), e.g. $mt"; else note "not measured: $mt (timeout, budget or no permission)"; fi
@@ -297,10 +335,12 @@ EOF
 
 # ---------- git worktrees with dirty / unpushed / in-use state ----------
 inspect_wt() { # "<path><TAB><repo>" -> repo, path, KiB, dirty, unpushed, live, mtime, branch
-  local path=${1%%$'\t'*} repo=${1#*$'\t'} kb st n rc dirty unp live mt br
+  local path=${1%%$'\t'*} repo=${1#*$'\t'} kb st n rc dirty unp live mt br out
   [ -d "$path" ] || return 0
   if [ "$(date +%s)" -ge "$WT_DEADLINE" ]; then printf 'SKIP\t%s\t%s\n' "$repo" "$path"; return 0; fi
-  kb=$(T 6 du -sk "$path" 2>/dev/null | awk '{print $1}'); kb=${kb:-?}
+  kb='?'
+  if out=$(T 6 du -sk "$path" 2>/dev/null); then kb=$(printf '%s\n' "$out" | awk 'NR==1 && $1 ~ /^[0-9]+$/ {print $1}'); fi
+  kb=${kb:-?}
   st=$(T 5 git -C "$path" status --porcelain 2>/dev/null); rc=$?
   if [ $rc -ne 0 ]; then dirty='?'; elif [ -n "$st" ]; then dirty=1; else dirty=0; fi
   n=$(T 5 git -C "$path" rev-list --count HEAD --not --remotes 2>/dev/null); rc=$?
@@ -351,7 +391,8 @@ EOF
       for (r in c) if (minkb>0 && uns[r]==0 && kb[r]<minkb) sn++
       for (r in c) {
         if (sn>=2 && minkb>0 && uns[r]==0 && kb[r]<minkb) { sc+=c[r]; skb+=kb[r]; if (mt[r]>smt) smt=mt[r]; stg=stg (stg ? "|" : "") tg[r]; continue }
-        print "CLEAN\t" r "\t" c[r] "\t" kb[r] "\t" mt[r] "\t" kc[r,"codex"]+0 "\t" kc[r,"claude"]+0 "\t" kc[r,"other"]+0 "\t" uns[r]+0 "\t" tg[r] }
+        # An empty TSV field is collapsed by Bash read; keep unknown sizes explicit.
+        print "CLEAN\t" r "\t" c[r] "\t" (uns[r]>0 ? "?" : kb[r]+0) "\t" mt[r]+0 "\t" kc[r,"codex"]+0 "\t" kc[r,"claude"]+0 "\t" kc[r,"other"]+0 "\t" uns[r]+0 "\t" tg[r] }
       if (sn>=2) print "SMALL\t" sn "\t" sc "\t" skb "\t" smt "\t" stg }' "$W/wt.out" |
     while IFS="$TAB" read -r kind a b c2 d2 e f g h i; do
       case "$kind" in
@@ -402,6 +443,120 @@ phase_deep() {
   note "local Time Machine snapshots: ${snaps:-0} (macOS reclaims these itself when space is needed; sizes cannot be read cheaply)"
 }
 
+# ---------- bounded detail and decision evidence ----------
+detail_job() {
+  local id=${1%%$'\t'*} p=${1#*$'\t'} depth=1 tmp=$W/detail.${1%%$'\t'*}
+  [ "$id" = backups ] && depth=2
+  if ! T "$ENTROPY_DETAIL_BUDGET" du -k -d "$depth" "$p" > "$tmp" 2>/dev/null; then
+    printf 'path:%s\tbreakdown unavailable within %ss\n' "$id" "$ENTROPY_DETAIL_BUDGET"
+    return
+  fi
+  sort -t "$TAB" -k1,1nr "$tmp" | awk -F'\t' -v id="$id" -v p="$p" '
+    function size(k) { return k>=1048576 ? sprintf("%.1f GiB",k/1048576) : sprintf("%.0f MiB",k/1024) }
+    $2!=p {
+      name=substr($2,length(p)+2)
+      n=split(name,a,"/")
+      if (id=="backups" && n==2 && a[2] ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) {dates[a[1]]++; datedkb[a[1]]+=$1; next}
+      if (id=="backups" && n==2 && a[2]==".stversions") {versions=a[1] "/.stversions " size($1); next}
+      if (n==1 && shown++<3) details=details (details ? "; " : "") name " " size($1)
+    }
+    END { for (k in dates) details=details "; " k ": " dates[k] " dated snapshots " size(datedkb[k])
+      if (versions!="") details=details "; " versions
+      if (details!="") print "path:" id "\t" details }
+  '
+}
+phase_details() {
+  : > "$W/details.tsv"
+  [ -f "$W/path.sizes" ] || return 0
+  awk -F'\t' '$2 ~ /^[0-9]+$/ && $2>=524288 && $1 ~ /^(backups|xcode-derived-data|playwright|huggingface)$/ {print $1 "\t" $4}' "$W/path.sizes" |
+    tr '\n' '\0' | xargs -0 -n1 -P4 bash -c '[ -n "$0" ] && detail_job "$0"' > "$W/details.tsv"
+  if [ -f "$W/wt.out" ]; then
+    awk -F'\t' 'NF==8 && $4==0 && $5==0 && $6=="-" {
+      n[$1]++; if(n[$1]<=3) d[$1]=d[$1] (d[$1] ? "; " : "") $2 " [" $8 "]"
+    } END {for(k in d) print "wt:" k "\t" d[k] (n[k]>3 ? "; " n[k]-3 " more paths in saved run" : "")}' "$W/wt.out" >> "$W/details.tsv"
+  fi
+}
+
+prepare_decisions() {
+  local f
+  for f in cwds.tsv ps.snap details.tsv; do [ -f "$W/$f" ] || : > "$W/$f"; done
+  : > "$W/decisions.tsv"
+  : > "$W/history.previous"
+  [ -f "$ENTROPY_STATE_DIR/history.jsonl" ] && cp "$ENTROPY_STATE_DIR/history.jsonl" "$W/history.previous"
+  # Keep amounts and recommendation confidence separate. Unknown savings stay unknown.
+  awk -F'\t' -v OFS='\t' -v now="$RUN_TS" -v meta="$W/decisions.tsv" -v checks_ok="$([ -z "${NOCWD:-}${NOPS:-}" ] && echo 1 || echo 0)" '
+    function hs(k) { return k>=1048576 ? sprintf("%.1f GiB",k/1048576) : sprintf("%.0f MiB",k/1024) }
+    FILENAME ~ /cwds.tsv$/ { cwd[++nc]=$3; cp[nc]=$1; next }
+    FILENAME ~ /ps.snap$/ { cmd[++np]=$0; next }
+    FILENAME ~ /details.tsv$/ { detail[$1]=$2; next }
+    FILENAME ~ /history.previous$/ {
+      if (!match($0,/"ts":[0-9]+/)) next; ts=substr($0,RSTART+5,RLENGTH-5)+0
+      if (!match($0,/"key":"[^"]*"/)) next; key=substr($0,RSTART+7,RLENGTH-8)
+      if (key ~ /^proc:/) next  # RSS fluctuations and reused PIDs are not disk growth.
+      # Older worktree history may contain the timestamp-as-size parsing defect.
+      if (key ~ /^wt:/ && $0 !~ /"measurement_version":2/) next
+      if (!match($0,/"size_kb":-?[0-9]+/)) next; kb=substr($0,RSTART+10,RLENGTH-10)+0
+      if (ts<now && ts>priorTs[key] && kb>=0) {priorTs[key]=ts; priorKb[key]=kb}
+      if (ts<=now-86400 && ts>dayTs[key] && kb>=0) {dayTs[key]=ts; dayKb[key]=kb}
+      next
+    }
+    {
+      key=$3; confidence="review"; reason="Inspect ownership and contents before choosing"; reclaim=-1; growth=""; overlap=""; live=""
+      if ($2=="caches" && $11 ~ /^\// && index($11,"|")==0) {
+        for (i=1;i<=nc;i++) if (cwd[i]==$11 || index(cwd[i],$11 "/")==1) {live="cwd of PID " cp[i]; break}
+        if (live=="") for (i=1;i<=np;i++) if (index(cmd[i],$11)) {live="matching live process command"; break}
+        if (live=="") for (i=1;i<=np;i++) {
+          if ((key=="path:npm" && cmd[i] ~ /(npm|npm-cli.js) (install|ci|cache (add|verify))( |$)/) ||
+              (key=="path:bun" && cmd[i] ~ /bun (install|add)( |$)/) ||
+              (key=="path:pip" && cmd[i] ~ /pip[0-9.]* install( |$)/) ||
+              (key=="path:cocoapods" && cmd[i] ~ /pod (install|update)( |$)/) ||
+              (key=="path:yarn" && cmd[i] ~ /yarn (install|add)( |$)/)) {live="package installation in progress"; break}
+        }
+        if (live!="") {$1=9; $9="held"; reason="In use: " live}
+      }
+      if (key ~ /^proc:/) reason="Session ownership unverified; parent PID 1 or age alone is insufficient"
+      if (key ~ /^wt:/) reason="Clean and on a remote; recheck live use and untracked files before removal"
+      if (key=="path:backups") reason="Review retention at source and replica; a local trim may regrow"
+      if (key=="path:pnpm" || key=="path:ios-simulators" || key ~ /^docker:/) reason="Occupied bytes do not establish how much this action will free"
+      if (key=="path:playwright" || key=="path:playwright-mcp-profiles") reason="Check browser version and profile use; profile logins may be lost"
+      if (key=="path:huggingface") reason="Check model use and download cost before removing"
+      if (key=="path:uv") reason="Shared package cache; cleanup means future installs may re-download packages"
+      if (key=="path:xcode-derived-data") reason="Build output; inspect projects and recent build activity first"
+      if (key ~ /^path:(npm|yarn|pip|bun|cocoapods)$/ && $1!=9 && $5 ~ /^[0-9]+$/ && checks_ok==1 && nc>0 && np>0) {
+        confidence="high"; reason="Measured rebuildable download cache; no matching cwd or process command; next install re-downloads"
+        reclaim=$5
+      }
+      if (key ~ /^path:/ && index($11,"|")==0) {
+        paths[key]=$11; amounts[key]=$5
+      }
+      if (dayTs[key]>0) {priorTs[key]=dayTs[key]; priorKb[key]=dayKb[key]}
+      if (priorTs[key]>0 && $5 ~ /^[0-9]+$/) {
+        delta=$5-priorKb[key]
+        elapsed=now-priorTs[key]
+        ago=(elapsed>=86400 ? int(elapsed/86400) "d" : (elapsed>=3600 ? int(elapsed/3600) "h" : int(elapsed/60) "m"))
+        if (delta>=1024 || delta<=-1024) growth=(delta>=0 ? "+" : "-") hs(delta>=0 ? delta : -delta) " since measured scan " ago " ago"
+        if (key=="path:xcode-derived-data" && (delta>524288 || ($7>=0 && $7<604800))) reason="Recent build output; keeping it avoids a full rebuild"
+      }
+      if ($5=="?" || $5<0) {confidence="unknown"; reclaim=-1; reason="Size incomplete or unavailable; no savings estimate"}
+      if ($1==9 || $9=="held") {confidence="held"; reclaim=-1; if(live=="")reason=$4}
+      row[key]=$0; keys[++nr]=key; conf[key]=confidence; why[key]=reason; rec[key]=reclaim; hist[key]=growth
+    }
+    END {
+      for (n=1;n<=nr;n++) {
+        key=keys[n]
+        if (key in paths) for (parent in paths) {
+          if (parent!=key && paths[parent]!="" && index(paths[key],paths[parent] "/")==1 && amounts[parent] ~ /^[0-9]+$/) {over[key]=parent; break}
+        }
+        # Multi-target profiles are children of the browser root as well.
+        if (key=="path:playwright-mcp-profiles" && ("path:playwright" in paths) && amounts["path:playwright"] ~ /^[0-9]+$/) over[key]="path:playwright"
+        print key,conf[key],why[key],(detail[key]!="" ? detail[key] : "-"),(hist[key]!="" ? hist[key] : "-"),rec[key],(over[key]!="" ? over[key] : "-") > meta
+        print row[key]
+      }
+    }
+  ' "$W/cwds.tsv" "$W/ps.snap" "$W/details.tsv" "$W/history.previous" "$W/items.tsv" > "$W/items.checked"
+  mv "$W/items.checked" "$W/items.tsv"
+}
+
 # ---------- ranking, rendering, history ----------
 render() {
   local now hist=$ENTROPY_STATE_DIR/history.jsonl tz off f
@@ -410,6 +565,7 @@ render() {
   tz=$(date +%z); off=$(( 10#${tz:1:2} * 3600 + 10#${tz:3:2} * 60 )); [ "${tz:0:1}" = "-" ] && off=$((-off))
   MINKB=$((ENTROPY_MIN_MB * 1024)); [ -n "$ALL" ] && MINKB=0
   cat "$W"/i.* 2>/dev/null > "$W/items.tsv"
+  prepare_decisions
   : > "$W/hist.keys"
   if [ -f "$hist" ]; then
     awk -v off="$off" -v now="$now" 'BEGIN { td=int((now+off)/86400) }
@@ -430,13 +586,16 @@ render() {
   awk -F'\t' -v host="$(hostname -s)" -v ts="$now" '
     function j(s) { gsub(/\\/,"\\\\",s); gsub(/"/,"\\\"",s); return "\"" s "\"" }
     function num(s) { return (s ~ /^-?[0-9.]+$/) ? s : j(s) }
+    FILENAME ~ /decisions.tsv$/ { cf[$1]=$2; why[$1]=$3; dt[$1]=$4; gr[$1]=$5; re[$1]=$6; ov[$1]=$7; next }
     FILENAME ~ /machine.tsv$/ { if ($1=="topcpu") { ntc++; tca[ntc]=$2; tcp[ntc]=$3; next } m[++nm]=$1; mv[nm]=$2; next }
     FILENAME ~ /notes$/ { nn++; notes[nn]=$0; next }
     { row=sprintf("{\"id\":%s,\"category\":%s,\"key\":%s,\"what\":%s,\"size_kb\":%s,\"count\":%s,\"age_s\":%s,\"owner\":%s,\"priority\":%s,\"action\":%s,\"target\":%s,\"breaks\":%s,\"seen_before\":%s}",
         ($1=="-" ? "null" : j($1)), j($3), j($4), j($5), $6, $7, $8, j($9), j($10), j($11), j($12), j($13), $14)
+      sub(/}$/, "", row)
+      row=row sprintf(",\"confidence\":%s,\"reason\":%s,\"detail\":%s,\"growth\":%s,\"reclaimable_upper_kb\":%s,\"included_in\":%s}", j(cf[$4]),j(why[$4]),j(dt[$4]),j(gr[$4]),(re[$4]!="" ? re[$4] : -1),j(ov[$4]))
       if ($2==9) { nh++; held[nh]=row } else { ni++; item[ni]=row } }
     END {
-      printf "{\"host\":%s,\"ts\":%s,\"machine\":{", j(host), ts
+      printf "{\"host\":%s,\"ts\":%s,\"measurement_version\":2,\"machine\":{", j(host), ts
       for (i=1;i<=nm;i++) printf "%s%s:%s", (i>1?",":""), j(m[i]), (m[i]=="host"||m[i]=="os"||m[i]=="spotlight") ? j(mv[i]) : num(mv[i])
       printf "},\"top_cpu\":["
       for (i=1;i<=ntc;i++) printf "%s{\"app\":%s,\"pcpu\":%s}", (i>1?",":""), j(tca[i]), tcp[i]
@@ -446,14 +605,14 @@ render() {
       for (i=1;i<=nh;i++) printf "%s%s", (i>1?",":""), held[i]
       printf "],\"notes\":["
       for (i=1;i<=nn;i++) printf "%s%s", (i>1?",":""), j(notes[i])
-      printf "]}\n" }' "$W/machine.tsv" "$W/notes" "$W/ranked.tsv" > "$W/out.json"
+      printf "]}\n" }' "$W/decisions.tsv" "$W/machine.tsv" "$W/notes" "$W/ranked.tsv" > "$W/out.json"
   mkdir -p "$ENTROPY_STATE_DIR/runs"
   cp "$W/out.json" "$ENTROPY_STATE_DIR/runs/$now.json"
   cp "$W/out.json" "$ENTROPY_STATE_DIR/last.json"
   ls -1 "$ENTROPY_STATE_DIR/runs" | sort -r | tail -n +21 | while read -r f; do rm -f "$ENTROPY_STATE_DIR/runs/$f"; done
 
   if [ -z "$ENTROPY_NO_HISTORY" ]; then
-    awk -F'\t' -v ts="$now" -v host="$(hostname -s)" '{printf "{\"ts\":%s,\"host\":\"%s\",\"key\":\"%s\",\"cat\":\"%s\",\"size_kb\":%s,\"count\":%s}\n", ts, host, $4, $3, $6, $7}' "$W/ranked.tsv" >> "$hist"
+    awk -F'\t' -v ts="$now" -v host="$(hostname -s)" '{printf "{\"ts\":%s,\"measurement_version\":2,\"host\":\"%s\",\"key\":\"%s\",\"cat\":\"%s\",\"size_kb\":%s,\"count\":%s}\n", ts, host, $4, $3, $6, $7}' "$W/ranked.tsv" >> "$hist"
   fi
 
   if [ -n "$JSON" ]; then cat "$W/out.json"; return; fi
@@ -483,10 +642,10 @@ render_table() {
         s=w; sub(/^.* listening on /,"",s); sub(/, reachable.*$/,"",s); n=split(s,a,","); ports=""
         for (i=1;i<=n;i++) { p=a[i]; sub(/^.*:/,"",p); if (index("," ports ",", "," p ",")==0) ports=ports (ports?",":"") ":" p }
         return ports }
-    function what(f,   w, k, id, lab, nm) {
+    function what(f,   w, k, id, lab, nm, parts) {
       w=f[5]; k=f[4]
-      if (k ~ /^proc:/) { id=substr(k,6); lab=shortlab(id, w); if (f[9] ~ /parent gone/) nm="orphaned"; else nm=f[9]
-        return f[7] TIMES " " lab ((nm!="-" && nm!="") ? " " DOT " " nm : "") }
+      if (k ~ /^proc:/) { split(k,parts,":"); id=parts[2]; lab=shortlab(id, w); nm=f[9]
+        return lab " " DOT " " nm " " DOT " PID " parts[3] " (" f[7] " processes)" }
       if (k ~ /^launch:/) return "restarting launch agent " DOT " " f[9]
       if (k=="docker:running") return f[7] " containers running" ((f[9]!="-") ? " " DOT " " f[9] : "")
       if (k=="docker:reclaimable") return f[9] " images + build cache"
@@ -509,11 +668,10 @@ render_table() {
       if (f[11]=="path") return "remove"
       return "clean" }
     function marker(f,  kb) { kb=f[6]+0
-      if (f[2]==0) return "G"
       if (f[10]=="ask" || f[11]=="inspect-and-ask" || f[3]=="user data" || doverb(f)=="migrate") return "D"
-      if (f[4] ~ /^(proc|launch):/) return "G"
-      if (f[10]=="low" || (kb>=0 && kb<524288)) return "L"
-      return "G" }
+      if (cf[f[4]]=="high") return "G"
+      return "L" }
+    FILENAME ~ /decisions.tsv$/ { cf[$1]=$2; why[$1]=$3; dt[$1]=$4; gr[$1]=$5; re[$1]=$6; ov[$1]=$7; next }
     FILENAME ~ /machine.tsv$/ { if ($1=="topcpu") { top=top (top?" | ":"") $2 " " $3 "%"; next } M[$1]=$2; next }
     FILENAME ~ /notes$/ { print "NOTE", $0; next }
     { rows++; r[rows]=$0 }
@@ -523,11 +681,11 @@ render_table() {
       print "HDR", (M["disk_used_pct"]!="" ? M["disk_used_pct"] : "?"), (M["swap_pct"]!="" ? M["swap_pct"] : "?"), sprintf("%.1f", M["load_ratio"]), up, host, run
       w=""
       if (M["load_ratio"]>1.5) w=w "load is over 1.5x the core count; "
-      if (M["swap_pct"]>50) w=w "swap over half used (a reboot clears it); "
-      if (M["uptime_days"]>7) w=w "uptime over 7 days; "
+      if (M["swap_used_mb"]>8192) w=w sprintf("%.1f GiB swap allocated; not a live pressure diagnosis; ",M["swap_used_mb"]/1024)
       if (M["disk_free_kb"]!="" && M["disk_free_kb"]<15728640) w=w "under 15 GiB free; "
       if (w!="") print "WATCH", substr(w,1,length(w)-2)
       if (top!="") print "TOP", top
+      if (M["disk_free_kb"]!="") print "NOTE", "Free disk: " gib(M["disk_free_kb"]) ". SIZE is occupied disk or process RSS; AGE is directory mtime/process age, not last use."
       for (i=1;i<=rows;i++) { split(r[i], f, "\t")
         if (f[4] ~ /^proc:/) { np=split(f[12], pl, " "); for (t=1;t<=np;t++) pidrow[pl[t]]=i } }
       for (i=1;i<=rows;i++) { split(r[i], f, "\t")
@@ -537,19 +695,29 @@ render_table() {
       for (i=1;i<=rows;i++) { split(r[i], f, "\t")
         if (f[4] ~ /^listen:/) continue
         if (f[17]==1) { nsmall++; smallkb+=(f[6]>0 ? f[6] : 0); continue }
-        if (f[2]==9) { nheld++; heldkb+=(f[6]>0 ? f[6] : 0)
+        if (f[2]==9) { nheld++; if(f[4] !~ /^proc:/)heldkb+=(f[6]>0 ? f[6] : 0)
+          if(f[4] ~ /^proc:/) print "NOTE", "HELD " what(f) "; live agent ancestor detected"
           w=f[5]; sub(/ worktree kept: /," " DOT " ",w)
           print "HELD", 9, DASH, "-", w, (f[16]==1 ? "?" : hs(f[6])), ha(f[8]), DASH, "keep"; continue }
         m=marker(f); kb=f[6]+0
-        if (m=="D") ask+=(kb>0 ? kb : 0); else if (f[4] !~ /^proc:/) safe+=(kb>0 ? kb : 0)
-        if (m=="G" && kb>0) { cand++; ck[cand]=kb; ci[cand]=f[1] }
+        if (f[4] !~ /^(proc|launch|docker):/ && ov[f[4]]=="-") occupied+=(kb>0 ? kb : 0)
+        if (m=="G" && re[f[4]]>0) { safe+=re[f[4]]; cand++; ck[cand]=re[f[4]]; ci[cand]=f[1]; cr[cand]=why[f[4]] }
         print "ROW", f[15], f[1], m, (tag[i] ? "LAN " tag[i] " " DOT " " : "") what(f), (f[16]==1 ? "?" : hs(f[6])), ha(f[8]), (f[14]>0 ? (f[14]>99 ? 99 : f[14]) : DASH), doverb(f) }
+      for (i=1;i<=rows;i++) {split(r[i],f,"\t"); if(f[2]==9 || f[17]==1 || f[4] ~ /^listen:/)continue
+        msg=""
+        if(f[4] ~ /^proc:/) msg=what(f) "; " why[f[4]]
+        else if(dt[f[4]]!="-" && dt[f[4]]!="") msg=dt[f[4]] "; " why[f[4]]
+        else if(f[6]>=524288 || f[6]<0) msg=why[f[4]]
+        if(ov[f[4]]!="-" && ov[f[4]]!="")msg=msg "; size already included in " ov[f[4]]
+        if(gr[f[4]]!="-" && gr[f[4]]!="" && gr[f[4]] !~ /^\+0 MiB/)msg=msg (msg ? "; " : what(f) "; ") gr[f[4]]
+        if(msg!="")print "NOTE", f[1] "  " msg
+      }
       if (also!="") print "NOTE", "also listening on LAN: " also
       pick=""
       for (t=1;t<=3;t++) { b=0; for (i=1;i<=cand;i++) if (ck[i]>0 && (b==0 || ck[i]>ck[b])) b=i
-        if (b==0) break; pick=pick (pick?" ":"") ci[b]; ck[b]=-1 }
-      print "SUM", gib(safe), gib(ask), nheld+0, gib(heldkb), (pick!="" ? pick : "-"), nsmall+0, gib(smallkb)
-    }' "$W/machine.tsv" "$W/notes" "$W/ranked.tsv" > "$W/grid.tsv"
+        if (b==0) break; pick=pick (pick?" ":"") ci[b]; print "NOTE", "RECOMMEND " ci[b] "  up to " hs(ck[b]) ": " cr[b]; ck[b]=-1 }
+      print "SUM", gib(safe), gib(occupied), nheld+0, gib(heldkb), (pick!="" ? pick : "-"), nsmall+0, gib(smallkb)
+    }' "$W/decisions.tsv" "$W/machine.tsv" "$W/notes" "$W/ranked.tsv" > "$W/grid.tsv"
 
   case "$cols" in ''|*[!0-9]*) cols=100 ;; esac
 
@@ -625,6 +793,9 @@ render_table() {
   printf '%s%s%s\n' "$left" "$S" "$host"
   [ -n "$watch" ] && printf '  WATCH    %s\n' "$watch"
   [ -n "$top" ] && printf '  TOP CPU  %s\n' "$top"
+  for ((j = 1; j <= nn; j++)); do
+    case "${NOTES[j]}" in RECOMMEND\ *) printf '  %s\n' "${NOTES[j]}" ;; esac
+  done
   echo
 
   if [ "$nrows" -gt 0 ]; then
@@ -634,11 +805,10 @@ render_table() {
   fi
 
   local l1 l2 r1 r2 lw
-  l1="   $GG  worth doing      $GD  ask first      $GL  low value"
-  l2="   safe now  ≈ $safe      ask first  ≈ $ask"
-  [ $asc = 1 ] && l2="   safe now  ~ $safe      ask first  ~ $ask"
+  l1="   $GG  recommended      $GD  review first      $GL  optional"
+  l2="   cache candidates up to $safe; measured paths $ask (overlaps excluded)"
   r1="held  $nheld $sepd $heldkb  (--held)"
-  r2=""; [ "$pick" != "-" ] && r2="pick  $pick  $sepd  \"safe\""
+  r2=""; [ "$pick" != "-" ] && r2="suggested picks  $pick  $sepd  recheck before action"
   lw=${#l1}; [ ${#l2} -gt $lw ] && lw=${#l2}
   echo
   if [ $((lw + 4 + ${#r1})) -le $tw ] && [ $((lw + 4 + ${#r2})) -le $tw ]; then
@@ -656,7 +826,10 @@ render_table() {
   fi
   if [ "$nn" -gt 0 ]; then
     echo
-    for ((j = 1; j <= nn; j++)); do echo "  NOTE     ${NOTES[j]}"; done
+    for ((j = 1; j <= nn; j++)); do
+      case "${NOTES[j]}" in RECOMMEND\ *) continue ;; esac
+      echo "  NOTE     ${NOTES[j]}"
+    done
   fi
 }
 
@@ -714,21 +887,25 @@ main() {
   [ -s "$CUL" ] || { echo "entropy: culprit table not found" >&2; return 1; }
 
   export TMO W CUL
-  export -f T size_job inspect_wt
-  ps -Ao pid=,ppid=,etime=,rss=,pcpu=,command= > "$W/ps.snap" 2>/dev/null
-  T 10 lsof -nP -d cwd -Fpcn 2>/dev/null |
-    awk '/^p/{p=substr($0,2)} /^c/{c=substr($0,2)} /^n/{print p "\t" c "\t" substr($0,2)}' > "$W/cwds.tsv"
-
-  NOCWD=""; [ -s "$W/cwds.tsv" ] || { NOCWD=1; note "live-use check unavailable (lsof returned nothing): worktrees are held, not offered"; }
+  export -f T size_job inspect_wt detail_job
+  export TAB ENTROPY_DETAIL_BUDGET
+  NOPS=""; NOCWD=""
+  ps -Ao pid=,ppid=,etime=,rss=,pcpu=,command= > "$W/ps.snap" 2>/dev/null || NOPS=1
+  [ -s "$W/ps.snap" ] || NOPS=1
+  T 10 lsof -nP -d cwd -Fpcn > "$W/cwds.raw" 2>/dev/null || NOCWD=1
+  awk '/^p/{p=substr($0,2)} /^c/{c=substr($0,2)} /^n/{print p "\t" c "\t" substr($0,2)}' "$W/cwds.raw" > "$W/cwds.tsv"
+  [ -s "$W/cwds.tsv" ] || NOCWD=1
+  if [ -n "$NOCWD$NOPS" ]; then NOCWD=1; note "live-use check unavailable or incomplete: worktrees held; no confident cache recommendations"; fi
   export NOCWD ALL ENTROPY_MIN_MB
-  phase_machine
-  phase_procs &
-  phase_launch &
-  phase_listen &
-  phase_docker &
-  phase_paths &
-  phase_worktrees &
+  timed_phase phase_machine &
+  timed_phase phase_procs &
+  timed_phase phase_launch &
+  timed_phase phase_listen &
+  timed_phase phase_docker &
+  timed_phase phase_paths &
+  timed_phase phase_worktrees &
   wait
+  timed_phase phase_details
   [ -n "$deep" ] && phase_deep
   render
 }

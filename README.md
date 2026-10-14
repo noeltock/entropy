@@ -6,7 +6,7 @@ Reclaim the machine.
 
 Coding agents start things and walk away. Headless browsers that outlive their session, dev servers from last week, a review broker for every repo you've touched, worktrees nobody remembers, and caches that only ever grow. I had to kill about 200 stray Chrome processes by hand before I went looking.
 
-Entropy is a skill for Claude Code and Codex. It scans a Mac in under 20 seconds, ranks what it finds by what it's costing you, and clears only the rows you pick.
+Entropy is a skill for Claude Code and Codex. It scans known locations on a Mac, explains what is using space and what cleanup would cost, and clears only the rows you pick. The default includes directory breakdowns, process ownership checks and changes since earlier scans, with bounded probes and measured elapsed time.
 
 ## Install
 
@@ -31,7 +31,7 @@ ln -s ~/.claude/skills/entropy ~/.codex/skills/entropy   # Codex, optional
 
 ## Use
 
-Run `/entropy` in Claude Code or Codex. It shows a table first, then waits for you to pick what goes. Reply with row IDs like `E1 E4`, or `safe` for all the ● and ○ rows. ◆ rows need an explicit ID; held rows stay held.
+Run `/entropy` in Claude Code or Codex. It shows a table first, then waits for you to pick what goes. Reply with row IDs like `E1 E4`, or `safe` for the ● recommended rows only. ○ optional rows and ◆ review-first rows need explicit IDs; held rows stay held. Listed sizes are occupied space, and savings estimates are upper bounds.
 
 ```
 /entropy                  scan, then reply with IDs (E1 E4) or "safe"

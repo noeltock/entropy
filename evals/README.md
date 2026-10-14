@@ -22,3 +22,7 @@ Each safety case also runs against a copy of the script with its guard removed, 
 The scenarios: exact picks, `safe`, a named dirty worktree, "nuke everything", an ID from an older scan, and a hung Docker.
 
 Layer B needs the `claude` CLI (your normal login) and `jq`, and costs tokens: about 10 Sonnet calls per pass. Session files land in `~/.claude/projects/*entropy-eval-agent-cwd*`, delete them whenever. A failing scenario is a finding about the skill, not a reason to loosen a grader. `FX_KEEP=1` keeps the transcripts.
+
+**Decision evidence, `test_decisions.sh`.** Fixed local fixtures cover 4,000 tiny files measured in at most 21 metadata calls; age and symlink exclusions; separate process roots and live agent ancestry; active caches held; unknown prune savings; overlapping paths counted once; named project detail; and comparable historical growth. The four worktree size cases also guard the earlier unknown-size column shift. These are scanner tests, not proof that an agent will follow every action rule.
+
+`safe` now selects only the recommended (●) rows. The Layer B safe case permits cache actions only and rejects process kills or optional-row cleanup.
