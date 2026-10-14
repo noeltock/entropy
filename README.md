@@ -6,7 +6,7 @@ Reclaim the machine.
 
 Coding agents start things and walk away. Headless browsers that outlive their session, dev servers from last week, a review broker for every repo you've touched, worktrees nobody remembers, and caches that only ever grow. I had to kill about 200 stray Chrome processes by hand before I went looking.
 
-Entropy is a skill for Claude Code and Codex. It scans known locations on a Mac, explains what is using space and what cleanup would cost, and clears only the rows you pick. The default includes directory breakdowns, process ownership checks and changes since earlier scans, with bounded probes and measured elapsed time.
+Entropy is a skill for Claude Code and Codex. It checks known locations on your Mac, shows what's taking space, who owns it and what's grown since last time. Recommendations come with a reason and the cost of rebuilding or downloading things again. You pick what goes.
 
 ## Install
 
@@ -31,7 +31,7 @@ ln -s ~/.claude/skills/entropy ~/.codex/skills/entropy   # Codex, optional
 
 ## Use
 
-Run `/entropy` in Claude Code or Codex. It shows a table first, then waits for you to pick what goes. Reply with row IDs like `E1 E4`, or `safe` for the ● recommended rows only. ○ optional rows and ◆ review-first rows need explicit IDs; held rows stay held. Listed sizes are occupied space, and savings estimates are upper bounds.
+Run `/entropy` in Claude Code or Codex. It leads with recommendations, then the table and details. Reply with row IDs like `E1 E4`, or `safe` for the ● recommended rows only. ○ optional rows and ◆ review-first rows need explicit IDs; held rows stay held. Listed sizes aren't promised savings. Unknown sizes stay unknown.
 
 ```
 /entropy                  scan, then reply with IDs (E1 E4) or "safe"
@@ -53,6 +53,6 @@ Paths and time budgets live at the top of `scripts/entropy.sh` (override any of 
 
 ## Evals
 
-`bash evals/run.sh --no-agent` runs the deterministic tests in about 15 seconds, no model needed. Drop `--no-agent` to also run the agent scenarios through `claude -p` against a fake home folder, with every delete swapped for a logger. That part costs tokens. More in [evals/README.md](evals/README.md).
+`bash evals/run.sh --no-agent` checks sizing, recommendations and safety without a model. Drop `--no-agent` to also run the agent scenarios through `claude -p` against a fake home folder, with every delete swapped for a logger. That part costs tokens. More in [evals/README.md](evals/README.md).
 
 macOS only. It won't beat the second law, but it slows it down.

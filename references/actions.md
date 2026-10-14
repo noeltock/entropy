@@ -1,6 +1,6 @@
 # Acting on picked rows
 
-Act on each row's `target`, read from `~/.local/state/entropy/runs/<run id>.json` for the run id in the table the user picked from (`last.json` is just the most recent scan). Only named IDs, and only after a fresh check right before acting: things change between the scan and the pick.
+Act on each row's `target`, read from `~/.local/state/entropy/runs/<run id>.json` for the run id in the table the user picked from (`last.json` is just the most recent scan). Use named IDs or ● rows selected by `safe`. Recheck before acting: things change after a scan.
 
 ## Live-use gate (before removing any path)
 
@@ -11,11 +11,10 @@ Act on each row's `target`, read from `~/.local/state/entropy/runs/<run id>.json
 
 ## Processes
 
-1. Confirm each PID still runs the expected command (`ps -o command= -p <pid>`). PIDs get reused.
+1. Check session ownership first. Live or unclear owners stay held. Confirm each PID's command (`ps -o command= -p <pid>`): PIDs get reused.
 2. Kill children first, then parents, in the order the target lists them: `printf '%s\n' <pids> | xargs kill`. zsh doesn't word-split `$VAR`, so never `kill $PIDS`.
 3. Wait about three seconds, list survivors with `ps -p`, and `xargs kill -9` only those.
-4. Re-run the scan and confirm the row is gone. Orphaned agent brokers ignore a parent-only kill, which is why the whole tree is targeted.
-5. If the owning session is still alive (the OWNER column), ask that session to close its own browsers or servers first.
+4. Re-run the scan and confirm the row is gone. Killing only a broker's parent can leave its children running.
 
 ## Launch agents
 

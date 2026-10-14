@@ -1,17 +1,17 @@
 # evals
 
-The scan only reads. What can go wrong is a bad call in the table (the agent trusts it) or a bad action after a pick, so every case here is a real way something could get deleted or killed by mistake. Everything runs against a throwaway folder from `mktemp -d`, and nothing outside it is touched.
+The scan only reads. What can go wrong is a bad call in the table (the agent trusts it) or a bad action after a pick, so every case here is a real way something could get deleted or killed by mistake. Targets live in a throwaway `mktemp -d` folder. Agent runs also write session logs.
 
 ```bash
 bash evals/run.sh              # everything
-bash evals/run.sh --no-agent   # layer A only: about 15 s, no model, just bash and git
+bash evals/run.sh --no-agent   # scanner checks only, no model
 bash evals/run.sh --repeat 3   # agent scenarios three times each
 ```
 
-**Layer A, `test_triage.sh`.** Points the script at a fake home with `ENTROPY_*` overrides and hides real processes, launchd and Docker behind the shims in `shims/`. It checks that:
+**Layer A.** Sizing and decision checks run first. Then `test_triage.sh` points the script at a fake home with `ENTROPY_*` overrides and hides real processes, launchd and Docker behind the shims in `shims/`. It checks that:
 - a clean, pushed worktree is offered, while dirty, unpushed, in-use and unreadable ones are held, and nothing is offered when `lsof` is unavailable
 - the Docker Desktop disk, backups and Trash are always ask-first
-- the process minimum age holds, and orphans are flagged
+- young processes are skipped; detached trees need review
 - every selectable row stays inside the fixture, and a full `--deep` run changes nothing
 - `--json` parses and its IDs match the table and the run file, and small items stay hidden without `--all`
 
@@ -23,6 +23,6 @@ The scenarios: exact picks, `safe`, a named dirty worktree, "nuke everything", a
 
 Layer B needs the `claude` CLI (your normal login) and `jq`, and costs tokens: about 10 Sonnet calls per pass. Session files land in `~/.claude/projects/*entropy-eval-agent-cwd*`, delete them whenever. A failing scenario is a finding about the skill, not a reason to loosen a grader. `FX_KEEP=1` keeps the transcripts.
 
-**Decision evidence, `test_decisions.sh`.** Fixed local fixtures cover 4,000 tiny files measured in at most 21 metadata calls; age and symlink exclusions; separate process roots and live agent ancestry; active caches held; unknown prune savings; overlapping paths counted once; named project detail; and comparable historical growth. The four worktree size cases also guard the earlier unknown-size column shift. These are scanner tests, not proof that an agent will follow every action rule.
+**Decision checks, `test_decisions.sh`.** Fixtures cover 4,000 files in at most 21 metadata calls, age and symlink exclusions, separate process roots, live owners, active installs, failed ownership checks, unknown savings, overlapping paths, project details and growth. `test_worktree_sizes.sh` covers four size cases, including the column shift that read a timestamp as a size. Legacy worktree history is excluded. Scanner tests can't prove agent behaviour.
 
-`safe` now selects only the recommended (●) rows. The Layer B safe case permits cache actions only and rejects process kills or optional-row cleanup.
+`safe` selects only recommended (●) rows. Its Layer B case rejects process kills and optional-row cleanup. Locally, 21 scanner cases passed and nine safety mutations were caught. Layer B and remote scans weren't rerun.

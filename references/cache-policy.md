@@ -2,7 +2,7 @@
 
 One table for every cache and rebuildable folder the script lists. The `priority` column in `culprits.tsv` mirrors the Default column here; change both together.
 
-Defaults: **clear** = offer normally; **offer** = list last and do not repeat the offer within a session once declined; **ask** = inspect with the user first, never automatic; **never** = not a cleanup target.
+Defaults: **clear** = list normally, not automatically recommended; **offer** = list last, don't repeat once declined; **ask** = inspect first; **never** = leave alone. Only measured ● rows qualify for `safe`, after ownership checks.
 
 All removals are permanent and use the tool's own command where one exists. Say the size first. State whether the cache is global (npm, uv, pnpm, pip and Homebrew are shared by every project) and that `node_modules` and virtualenvs are never touched: `--deep` lists large `node_modules` folders as information only, with no action.
 
@@ -32,7 +32,7 @@ All removals are permanent and use the tool's own command where one exists. Say 
 ## Why these defaults
 
 - Package caches are usually the biggest reclaimable items, and broad cleaners (mole included) deliberately protect them, so they need each tool's own command. That's what this table is for.
-- Browser downloads, simulators and device support cost one re-download or rebuild and lose no state, so they default to clear. Anything that can lose data (simulator app data, Docker volumes, backups) defaults to ask.
+- Rebuildable doesn't mean worth clearing. Browsers need downloads, fresh builds cost time, and profiles can hold logins. The scan weighs those costs separately. Backups, Docker data and simulator app data need a specific decision.
 
 ## Adding an item
 

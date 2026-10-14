@@ -18,11 +18,11 @@ metadata:
 
 # Entropy
 
-Agents start things and walk away. Entropy scans known locations with bounded probes, explains ownership and cleanup costs, and clears only the rows the user picks. The default includes large-directory breakdowns and changes since earlier scans; elapsed time is reported, not guaranteed. Run it as `/entropy`.
+Agents start things and walk away. Entropy checks known locations, explains what's taking space and who owns it, then clears only the rows you pick. Directory details and growth since earlier scans come by default. Probes have time limits; scan time varies. Run `/entropy`.
 
 ## Flow
 
-1. **Scan.** Run `bash <this skill's folder>/scripts/entropy.sh`. Flags: `--deep` for the slow scans, `--held` to list every held item, `--all` to include small rows, `--host <ssh-host>` to scan another Mac. The scan only reads, and every call has a timeout. It writes its state to `~/.local/state/entropy`, so under Codex's workspace-write sandbox this call needs escalation. If another run is in progress, wait for it.
+1. **Scan.** Run `bash <this skill's folder>/scripts/entropy.sh`. Flags: `--deep` for the slow scans, `--held` to list every held item, `--all` to include small rows, `--host <ssh-host>` to scan another Mac. Targets stay untouched; probes have time limits. It writes its state to `~/.local/state/entropy`, so a sandbox may require permission for that path. If another run is in progress, wait for it.
 2. **Show.** Paste the table exactly as printed, in a code block in the chat reply. Don't turn it into prose, and never render it as an image, HTML page or screenshot. Include the run header, legend, row details and RECOMMEND lines exactly as printed. Then give at most three concrete picks with their benefit, confidence and rebuild/download cost. Use the saved row evidence; do not promote optional or review-first rows merely because they are large.
 3. **Pick.** The user replies with IDs on one line ("E1 E4 E7"), or `safe` for the ● recommended rows only. ○ rows are optional and require named IDs; they are not part of `safe`. Nothing happens without a pick. ◆ rows are only acted on when named, after the checks below. Held rows are never acted on, even when named: give the reason and leave them.
 4. **Act.** Resolve IDs from `~/.local/state/entropy/runs/<run id>.json`, using the run id of the table the user picked from. Never use `last.json` or a later scan, including the re-run in step 5: IDs are renumbered every run. On another host the file lives on that host. Re-check each target right before acting, then follow [references/actions.md](references/actions.md).
